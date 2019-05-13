@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-typedef struct tps_container_t *tps_container;
+typedef struct tps_container* tps_container_t;
 
 /*
  * Size of a TPS area in bytes
