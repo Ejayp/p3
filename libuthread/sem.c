@@ -43,7 +43,7 @@ int sem_down(sem_t sem)
 
 	enter_critical_section();
 	//Blocks current thread if no semaphore
-	if(sem->count == 0){
+	while(sem->count == 0){
 		queue_enqueue(sem->blocked_queue, (void*)tid); 
 		thread_block();
 	}
