@@ -75,7 +75,7 @@ $(libuthread):
 clean:
 	@echo "CLEAN	$(CUR_PWD)"
 	$(Q)$(MAKE) V=$(V) D=$(D) -C $(UTHREADPATH) clean
-	$(Q)rm -rf $(objs) $(deps) $(programs)
+	$(Q)rm -rf $(objs) $(deps) $(programs) core
 
 # Keep object files around
 .PRECIOUS: %.o
