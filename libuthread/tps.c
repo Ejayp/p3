@@ -38,8 +38,6 @@ int tps_init(int segv)
 {
 	/* TODO: Phase 2 */
 
-	//removed NULL if statement
-	//
 	tps_queue=queue_create();
 	
 	return 0;
@@ -140,19 +138,22 @@ int tps_clone(pthread_t tid)
 	int fd = -1;
 	off_t offset = 0;
 
-printf("clone tid %ld\n", current_tid);
 	queue_iterate(tps_queue, find_tid, &current_tid, (void**) &curr_tps);
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
 
 	//Error Management
-	if(curr_tps->memAddress != NULL || tps->memAddress == NULL)
+	if(tps->memAddress == NULL)
+	{
+		printf("failed\n");
 		return -1;
-
+	}
 	//Maps memory to current tps and copies tps from @tid
-	curr_tps->tid = tid;
+	//then enqueues
+	curr_tps = (tps_container_t) malloc(sizeof(tps_container_t));
+	curr_tps->tid = current_tid;
 	curr_tps->memAddress = mmap(NULL, TPS_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, fd, offset);
 	memcpy(curr_tps->memAddress, tps->memAddress, TPS_SIZE);
-
+	queue_enqueue(tps_queue, curr_tps);
 	return 0;
 }
 
