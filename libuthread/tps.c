@@ -15,7 +15,12 @@
 /* TODO: Phase 2 */
 struct tps_container {
 	pthread_t tid;
+	pages_t page;
+};
+
+struct pages {
 	void* memAddress;
+	int refCounter;
 };
 
 queue_t tps_queue;
@@ -35,7 +40,7 @@ int find_tid(void *data, void *arg){
 
 int find_memAddress(void *data, void *arg){
 	tps_container_t a = (tps_container_t) data;
-	void* checkAddress = (void*) a->memAddress;
+	void* checkAddress = (void*) a->page->memAddress;
 	void** match = (void**) arg;
 
 	if(checkAddress == *match)
@@ -51,7 +56,7 @@ static void segv_handler(int sig, siginfo_t *si, void *context)
 	* fault occurred
 	*/
 	void *p_fault = (void*)((uintptr_t)si->si_addr & ~(TPS_SIZE - 1));
-	tps_container_t tps;
+	tps_container_t tps = NULL;
 
 	/*
 	* Iterate through all the TPS areas and find if p_fault matches one of them
@@ -90,29 +95,32 @@ int tps_init(int segv)
 
 int tps_create(void)
 {
-	/* TODO: Phase 2 */
 	pthread_t tid = pthread_self();
-	tps_container_t tps;
-//	tps_container_t temp_tps;
-	int queue_check;
+	tps_container_t tps = NULL;
+	pages_t page;
 	int fd = -1;
 	off_t offset = 0;
 
 	//check if tps exists
-	queue_check = queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
+	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
 
 	//If found return
-	if(queue_check == 1)
+	if(tps != NULL)
 		return -1;
 
-	//Create Tps
+	//Create Tps and its page
 	tps_container_t current_tps = (tps_container_t) malloc(sizeof(tps_container_t));
+	page = (pages_t) malloc(sizeof(pages_t));
 	current_tps->tid = tid;
-	current_tps->memAddress = mmap(NULL, TPS_SIZE, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, fd, offset);
+	page->memAddress = mmap(NULL, TPS_SIZE, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, fd, offset);
+	page->refCounter = 1;
 
-	if(current_tps->memAddress == MAP_FAILED)
-		printf("failed\n");
+	//if mmap fails return -1
+	if(page->memAddress == MAP_FAILED)
+		return -1;
 
+	//Sets page to the current tps and then enqueues the tps
+	current_tps->page = page;
 	enter_critical_section();
 	queue_enqueue(tps_queue, current_tps);
 	exit_critical_section();
@@ -122,22 +130,26 @@ int tps_create(void)
 
 int tps_destroy(void)
 {
-	/* TODO: Phase 2 */
-	tps_container_t tps;
+	tps_container_t tps = NULL;
 	pthread_t tid = pthread_self();
 
 	enter_critical_section();
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
+	exit_critical_section();
 
 	//If not found return
-	if(tps->memAddress == NULL)
+	if(tps == NULL)
 		return -1;
 	
 	//free tps and container
+	enter_critical_section();
 	queue_delete(tps_queue, tps);
 	exit_critical_section();
 
-	munmap(tps->memAddress, TPS_SIZE);
+	//if its the only tps on a page then unmap it
+	if(tps->page->refCounter == 1)
+		munmap(tps->page->memAddress, TPS_SIZE);
+
 	free(tps);
 	return 0;
 }
@@ -146,9 +158,8 @@ int tps_destroy(void)
 int tps_read(size_t offset, size_t length, char *buffer)
 {
 	/* TODO: Phase 2 */
-	tps_container_t tps;
+	tps_container_t tps = NULL;
 	pthread_t tid = pthread_self();
-//	int queue_check;
 
 	enter_critical_section();
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
@@ -156,21 +167,23 @@ int tps_read(size_t offset, size_t length, char *buffer)
 	
 	//error management
 	//reading offbounds or tps not found or buffer is NULL
-	if(offset+length>TPS_SIZE || buffer==NULL || tps->memAddress == NULL)
+	if(offset+length>TPS_SIZE || buffer==NULL || tps == NULL)
 		return -1;
 
 	//Enables reading
-	mprotect(tps->memAddress, length, PROT_READ);
-	memcpy(buffer, tps->memAddress, length);
+	mprotect(tps->page->memAddress, length, PROT_READ);
+	memcpy(buffer, tps->page->memAddress, length);
 	return 0;
-	
 }
 
 int tps_write(size_t offset, size_t length, char *buffer)
 {
 	/* TODO: Phase 2 */
-	tps_container_t tps;
+	tps_container_t tps = NULL;
+	pages_t newPage;
 	pthread_t tid = pthread_self();
+	int fd = -1;
+	off_t off = 0;
 
 	enter_critical_section();
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
@@ -178,39 +191,51 @@ int tps_write(size_t offset, size_t length, char *buffer)
 	
 	//error management
 	//reading offbounds or tps not found or buffer is NULL
-	if(offset+length>TPS_SIZE || buffer==NULL || tps->memAddress == NULL)
+	if(offset+length>TPS_SIZE || buffer==NULL || tps == NULL)
 		return -1;
 
-	//Enables writing
-	mprotect(tps->memAddress, length, PROT_WRITE);
-	memcpy(tps->memAddress, buffer, length);
+	//if refCounter has more than one tps
+	//then create a new page that copies the old pages contents
+	//set new page to tps's page
+	if(tps->page->refCounter > 1){
+		tps->page->refCounter--;
+		newPage = (pages_t) malloc(sizeof(pages_t));
+		newPage->memAddress = mmap(NULL, TPS_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, fd, off);
+		memcpy(newPage->memAddress, tps->page->memAddress, TPS_SIZE);
+		tps->page = newPage;
+		mprotect(tps->page->memAddress, length, PROT_NONE);
+	}
+	
+	//Enables writing and copies buffer
+	mprotect(tps->page->memAddress, length, PROT_WRITE);
+	memcpy(tps->page->memAddress, buffer, length);
 	return 0;
 }
 
 int tps_clone(pthread_t tid)
 {
-	/* TODO: Phase 2 */
-	tps_container_t curr_tps, tps;
+	tps_container_t curr_tps = NULL;
+	tps_container_t tps = NULL;
 	pthread_t current_tid = pthread_self();
-	int fd = -1;
-	off_t offset = 0;
 
+	//finds current and other thread in the queue
 	enter_critical_section();
 	queue_iterate(tps_queue, find_tid, &current_tid, (void**) &curr_tps);
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
 	exit_critical_section();
 
-	//Error Management
-	if(tps->memAddress == NULL)
-	{
+	//Fails if current thread has a tps or other thread doesnt have a tps
+	if(tps == NULL || curr_tps != NULL)
 		return -1;
-	}
-	//Maps memory to current tps and copies tps from @tid
+
+	//makes curr_tps and assigns its page to the other threads page
 	curr_tps = (tps_container_t) malloc(sizeof(tps_container_t));
 	curr_tps->tid = current_tid;
-	curr_tps->memAddress = mmap(NULL, TPS_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, fd, offset);
-	memcpy(curr_tps->memAddress, tps->memAddress, TPS_SIZE);
-	mprotect(tps->memAddress, TPS_SIZE, PROT_NONE);
+	curr_tps->page = (pages_t) malloc(sizeof(pages_t));
+	mprotect(tps->page->memAddress, TPS_SIZE, PROT_READ | PROT_WRITE);
+	curr_tps->page = tps->page;
+	curr_tps->page->refCounter++;
+	mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 	
 	//then enqueues
 	enter_critical_section();
