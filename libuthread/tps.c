@@ -23,7 +23,7 @@ struct pages {
 	int refCounter;
 };
 
-queue_t tps_queue;
+queue_t tps_queue = NULL;
 
 //data: tps_container_t
 //arg: tid to match with
@@ -38,6 +38,8 @@ int find_tid(void *data, void *arg){
 	return 0;
 }
 
+//data: pages_t
+//arg: memaddress to match
 int find_memAddress(void *data, void *arg){
 	tps_container_t a = (tps_container_t) data;
 	void* checkAddress = (void*) a->page->memAddress;
@@ -77,10 +79,10 @@ static void segv_handler(int sig, siginfo_t *si, void *context)
 
 int tps_init(int segv)
 {
-	/* TODO: Phase 2 */
-
+	//create queue
 	tps_queue=queue_create();
 	
+	//sets segfault handler
 	if(segv){
 		struct sigaction sa;
 
@@ -157,7 +159,6 @@ int tps_destroy(void)
 
 int tps_read(size_t offset, size_t length, char *buffer)
 {
-	/* TODO: Phase 2 */
 	tps_container_t tps = NULL;
 	pthread_t tid = pthread_self();
 
@@ -178,7 +179,6 @@ int tps_read(size_t offset, size_t length, char *buffer)
 
 int tps_write(size_t offset, size_t length, char *buffer)
 {
-	/* TODO: Phase 2 */
 	tps_container_t tps = NULL;
 	pages_t newPage;
 	pthread_t tid = pthread_self();
@@ -243,4 +243,3 @@ int tps_clone(pthread_t tid)
 	exit_critical_section();
 	return 0;
 }
-
