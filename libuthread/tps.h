@@ -7,6 +7,7 @@
 
 typedef struct tps_container* tps_container_t;
 
+typedef struct pages* pages_t;
 /*
  * Size of a TPS area in bytes
  */

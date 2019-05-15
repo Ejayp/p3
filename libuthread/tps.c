@@ -12,18 +12,17 @@
 #include "thread.h"
 #include "tps.h"
 
-/* TODO: Phase 2 */
 struct tps_container {
 	pthread_t tid;
 	pages_t page;
 };
 
 struct pages {
-	void* memAddress;
+	char* memAddress;
 	int refCounter;
 };
 
-queue_t tps_queue = NULL;
+queue_t tps_queue;
 
 //data: tps_container_t
 //arg: tid to match with
@@ -38,14 +37,12 @@ int find_tid(void *data, void *arg){
 	return 0;
 }
 
-//data: pages_t
-//arg: memaddress to match
 int find_memAddress(void *data, void *arg){
 	tps_container_t a = (tps_container_t) data;
-	void* checkAddress = (void*) a->page->memAddress;
-	void** match = (void**) arg;
+	char* checkAddress = (char*) a->page->memAddress;
+	char* match = (char*) arg;
 
-	if(checkAddress == *match)
+	if(*checkAddress == *match)
 		return 1;
 	
 	return 0;
@@ -60,6 +57,7 @@ static void segv_handler(int sig, siginfo_t *si, void *context)
 	void *p_fault = (void*)((uintptr_t)si->si_addr & ~(TPS_SIZE - 1));
 	tps_container_t tps = NULL;
 
+	printf("TPS protection error!\n");
 	/*
 	* Iterate through all the TPS areas and find if p_fault matches one of them
 	*/
@@ -68,7 +66,6 @@ static void segv_handler(int sig, siginfo_t *si, void *context)
 	/* Printf the following error message if match*/
 	if (tps)
 		fprintf(stderr, "TPS protection error!\n");
-
 	/* In any case, restore the default signal handlers */
 	signal(SIGSEGV, SIG_DFL);
 	signal(SIGBUS, SIG_DFL);
@@ -79,10 +76,8 @@ static void segv_handler(int sig, siginfo_t *si, void *context)
 
 int tps_init(int segv)
 {
-	//create queue
 	tps_queue=queue_create();
 	
-	//sets segfault handler
 	if(segv){
 		struct sigaction sa;
 
@@ -172,8 +167,12 @@ int tps_read(size_t offset, size_t length, char *buffer)
 		return -1;
 
 	//Enables reading
-	mprotect(tps->page->memAddress, length, PROT_READ);
-	memcpy(buffer, tps->page->memAddress, length);
+	mprotect(tps->page->memAddress, TPS_SIZE, PROT_READ);
+	int i;
+	for(i = 0; i < length; i++)
+		buffer[i] =  tps->page->memAddress[offset + i];
+
+	mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 	return 0;
 }
 
@@ -184,6 +183,7 @@ int tps_write(size_t offset, size_t length, char *buffer)
 	pthread_t tid = pthread_self();
 	int fd = -1;
 	off_t off = 0;
+	int i;
 
 	enter_critical_section();
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
@@ -201,14 +201,20 @@ int tps_write(size_t offset, size_t length, char *buffer)
 		tps->page->refCounter--;
 		newPage = (pages_t) malloc(sizeof(pages_t));
 		newPage->memAddress = mmap(NULL, TPS_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, fd, off);
+		mprotect(tps->page->memAddress, TPS_SIZE, PROT_READ);
 		memcpy(newPage->memAddress, tps->page->memAddress, TPS_SIZE);
+		mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 		tps->page = newPage;
-		mprotect(tps->page->memAddress, length, PROT_NONE);
 	}
 	
 	//Enables writing and copies buffer
-	mprotect(tps->page->memAddress, length, PROT_WRITE);
-	memcpy(tps->page->memAddress, buffer, length);
+	mprotect(tps->page->memAddress, TPS_SIZE, PROT_WRITE);
+//	memcpy(&tps->page->memAddress[offset], buffer, length);
+
+	for(i=0;i<length;i++)
+		tps->page->memAddress[offset+i]=buffer[i];
+
+	mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 	return 0;
 }
 
@@ -232,10 +238,8 @@ int tps_clone(pthread_t tid)
 	curr_tps = (tps_container_t) malloc(sizeof(tps_container_t));
 	curr_tps->tid = current_tid;
 	curr_tps->page = (pages_t) malloc(sizeof(pages_t));
-	mprotect(tps->page->memAddress, TPS_SIZE, PROT_READ | PROT_WRITE);
 	curr_tps->page = tps->page;
 	curr_tps->page->refCounter++;
-	mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 	
 	//then enqueues
 	enter_critical_section();
@@ -243,3 +247,4 @@ int tps_clone(pthread_t tid)
 	exit_critical_section();
 	return 0;
 }
+
