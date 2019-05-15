@@ -12,37 +12,44 @@
 #include "thread.h"
 #include "tps.h"
 
+//data structure to contain thread's tid and location of tps page
 struct tps_container {
 	pthread_t tid;
 	pages_t page;
 };
 
+//data structure to contain the tps page and reference counter
 struct pages {
 	char* memAddress;
 	int refCounter;
 };
 
+//global queue to contain all the tps and tid
 queue_t tps_queue;
 
 //data: tps_container_t
 //arg: tid to match with
+//return 1 if current thread's tid matches a tid in the queue
 int find_tid(void *data, void *arg){
 	tps_container_t a = (tps_container_t) data;
 	pthread_t checkTID = (pthread_t) a->tid;
 	pthread_t* match = (pthread_t*) arg;
 
+	//return 1 if there is a match
 	if(checkTID == *match)
 		return 1;
 	
 	return 0;
 }
 
+//return 1 if memory thread's memory address matches an address in the queue
 int find_memAddress(void *data, void *arg){
 	tps_container_t a = (tps_container_t) data;
 	char* checkAddress = (char*) a->page->memAddress;
 	char* match = (char*) arg;
 
-	if(*checkAddress == *match)
+	//return 1 if there is a match
+	if(checkAddress == match)
 		return 1;
 	
 	return 0;
@@ -76,8 +83,10 @@ static void segv_handler(int sig, siginfo_t *si, void *context)
 
 int tps_init(int segv)
 {
+	//initialize the queue
 	tps_queue=queue_create();
 	
+	//initialize segv and segv handler
 	if(segv){
 		struct sigaction sa;
 
@@ -108,9 +117,9 @@ int tps_create(void)
 	//Create Tps and its page
 	tps_container_t current_tps = (tps_container_t) malloc(sizeof(tps_container_t));
 	page = (pages_t) malloc(sizeof(pages_t));
-	current_tps->tid = tid;
+	current_tps->tid = tid; //set current thread's tid to associate it with tps
 	page->memAddress = mmap(NULL, TPS_SIZE, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, fd, offset);
-	page->refCounter = 1;
+	page->refCounter = 1; //only 1 thread for a newly created tps
 
 	//if mmap fails return -1
 	if(page->memAddress == MAP_FAILED)
@@ -118,7 +127,7 @@ int tps_create(void)
 
 	//Sets page to the current tps and then enqueues the tps
 	current_tps->page = page;
-	enter_critical_section();
+	enter_critical_section(); //critical section (global variable)
 	queue_enqueue(tps_queue, current_tps);
 	exit_critical_section();
 
@@ -156,6 +165,7 @@ int tps_read(size_t offset, size_t length, char *buffer)
 {
 	tps_container_t tps = NULL;
 	pthread_t tid = pthread_self();
+	int i;
 
 	enter_critical_section();
 	queue_iterate(tps_queue, find_tid, &tid, (void**) &tps);
@@ -168,10 +178,12 @@ int tps_read(size_t offset, size_t length, char *buffer)
 
 	//Enables reading
 	mprotect(tps->page->memAddress, TPS_SIZE, PROT_READ);
-	int i;
+
+	//copy contents in memAddress into buffer
 	for(i = 0; i < length; i++)
 		buffer[i] =  tps->page->memAddress[offset + i];
 
+	//reset protection to no access
 	mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 	return 0;
 }
@@ -209,11 +221,12 @@ int tps_write(size_t offset, size_t length, char *buffer)
 	
 	//Enables writing and copies buffer
 	mprotect(tps->page->memAddress, TPS_SIZE, PROT_WRITE);
-//	memcpy(&tps->page->memAddress[offset], buffer, length);
 
+	//write contents in buffer into memAddress
 	for(i=0;i<length;i++)
 		tps->page->memAddress[offset+i]=buffer[i];
 
+	//reset protection to no access
 	mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
 	return 0;
 }
