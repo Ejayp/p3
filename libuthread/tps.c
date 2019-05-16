@@ -118,7 +118,12 @@ int tps_create(void)
 	tps_container_t current_tps = (tps_container_t) malloc(sizeof(tps_container_t));
 	page = (pages_t) malloc(sizeof(pages_t));
 	current_tps->tid = tid; //set current thread's tid to associate it with tps
-	page->memAddress = mmap(NULL, TPS_SIZE, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, fd, offset);
+	page->memAddress = mmap(NULL, 
+				TPS_SIZE, 
+				PROT_NONE, 
+				MAP_SHARED | MAP_ANONYMOUS, 
+				fd, 
+				offset);
 	page->refCounter = 1; //only 1 thread for a newly created tps
 
 	//if mmap fails return -1
@@ -150,12 +155,17 @@ int tps_destroy(void)
 	//free tps and container
 	enter_critical_section();
 	queue_delete(tps_queue, tps);
-	exit_critical_section();
+
+	//decrements page counter
+	tps->page->refCounter--;
 
 	//if its the only tps on a page then unmap it
-	if(tps->page->refCounter == 1)
+	if(tps->page->refCounter == 0)
 		munmap(tps->page->memAddress, TPS_SIZE);
 
+	//dissasociate the page from tps then frees the entire struct
+	tps->page = NULL;
+	exit_critical_section();
 	free(tps);
 	return 0;
 }
@@ -212,7 +222,12 @@ int tps_write(size_t offset, size_t length, char *buffer)
 	if(tps->page->refCounter > 1){
 		tps->page->refCounter--;
 		newPage = (pages_t) malloc(sizeof(pages_t));
-		newPage->memAddress = mmap(NULL, TPS_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, fd, off);
+		newPage->memAddress = mmap(NULL, 
+					TPS_SIZE, 
+					PROT_READ | PROT_WRITE, 
+					MAP_SHARED | MAP_ANONYMOUS, 
+					fd, 
+					off);
 		mprotect(tps->page->memAddress, TPS_SIZE, PROT_READ);
 		memcpy(newPage->memAddress, tps->page->memAddress, TPS_SIZE);
 		mprotect(tps->page->memAddress, TPS_SIZE, PROT_NONE);
